@@ -12,7 +12,9 @@ import pygetwindow as gw
 import pyperclip
 import webbrowser
 import re
-
+import importlib.util
+import sys
+import pkgutil
 
 # =========================
 # CONFIG
@@ -21,6 +23,7 @@ MODEL = "qwen3:4b"
 MAX_ITERACIONES = 6
 MEMORIA_ARCHIVO = "memoria_agente.txt"
 LOG_ARCHIVO = "log_sesion.txt"
+MODULOS_ESTANDAR = sys.stdlib_module_names
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -106,12 +109,7 @@ def guardar_script(nombre_archivo, codigo):
 # =========================
 SYSTEM_PROMPT = """
 Eres un agente autónomo ejecutándose en WINDOWS.
-
 REGLAS:
-- No ejecutes nombres de módulos de Python directamente en la terminal de Windows.
-- Para usar un módulo como bs4, primero haz: import bs4
-- Luego ejecuta las funciones del módulo en un script Python.
-- Esto aplica para todas las librerías como requests, pandas, numpy, bs4, etc.
 - Usa la MEMORIA si existe información previa útil
 - No inventes rutas ni métodos que no existan realmente
 - No marques objetivo completado sin ejecutar código real
@@ -120,11 +118,10 @@ REGLAS:
 - Guarda solo reglas, conclusiones o patrones reutilizables
 - Usa formato: "RULE: cuando X ocurre → hacer Y"
 - No guardes flags genéricos ni estados temporales
-- 'requests' es una librería de Python, no un programa ejecutable.
-- No se puede ejecutar escribiendo 'requests' en PowerShell.
-- Para usarla, primero se importa en Python: 'import requests'.
-- Después se puede hacer, por ejemplo: requests.get("https://api.github.com")
-- Se puede usar en scripts Python (.py) o en la consola interactiva de Python.
+- 'requests' es una librería de Python, no un programa ejecutable
+- No se puede ejecutar escribiendo 'requests' en PowerShell
+- Para usarla, primero se importa en Python: 'import requests'
+- Se puede usar en scripts Python (.py) o en la consola interactiva de Python
 - Esto aplica igual a otras librerías de Python como 'pandas', 'numpy', etc.
 
 RAZONAMIENTO:
@@ -134,9 +131,7 @@ RAZONAMIENTO:
 - No confundas “avanzar” con “ejecutar”; pensar también es progreso.
 - Si ocurre un error, identifica la causa raíz antes de intentar corregirlo.
 
-
 Responde SOLO en JSON:
-
 {
   "thought": "razonamiento corto y claro",
   "action": "python | none",
@@ -187,33 +182,85 @@ def llamar_ia(historial, memoria, permisos):
     memoria_texto = "\n".join(
         m for m in memoria if m.startswith("CONCLUSION=")
     )
-
     contexto = SYSTEM_PROMPT + "\nMEMORIA:\n" + memoria_texto + f"\nPERMISOS: {permisos}\n" + "\n".join(historial)
     return ollama.generate(model=MODEL, prompt=contexto)["response"]
 
-def codigo_esta_escapado(codigo: str) -> bool:
-    # Detecta secuencias de escape fuera de strings
-    return bool(re.search(r'\\[nt]', codigo))
+# =========================
+# EJECUCIÓN INTELIGENTE
+# =========================
+def modulo_existe(modulo):
+    """Verifica si un módulo de Python está instalado y accesible"""
+    return importlib.util.find_spec(modulo) is not None
+
+def instalar_modulo(modulo):
+    """Intenta instalar automáticamente un módulo externo con pip"""
+    try:
+        log_estado(f"💡 Instalando módulo externo: {modulo}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", modulo])
+        return True
+    except Exception as e:
+        log_estado(f"❌ Error instalando módulo {modulo}: {e}")
+        return False
+
+def analizar_imports(codigo):
+    """Extrae módulos importados y verifica si existen"""
+    fallos = []
+    sugerencias = []
+    for linea in codigo.splitlines():
+        linea = linea.strip()
+        if linea.startswith("import "):
+            mod = linea.split()[1].split('.')[0]
+            if not modulo_existe(mod):
+                fallos.append(mod)
+                if mod not in MODULOS_ESTANDAR:
+                    sugerencias.append(mod)
+        elif linea.startswith("from "):
+            mod = linea.split()[1].split('.')[0]
+            if not modulo_existe(mod):
+                fallos.append(mod)
+                if mod not in MODULOS_ESTANDAR:
+                    sugerencias.append(mod)
+    return fallos, sugerencias
 
 def ejecutar_codigo(codigo, permisos):
     if not permisos['python'] and not permisos['apps']:
         return "⛔ Permiso para ejecutar código denegado"
 
+    # Verificar módulos antes de ejecutar
+    fallos, externos = analizar_imports(codigo)
+    if fallos:
+        # Intentar instalar automáticamente módulos externos faltantes
+        for mod in externos:
+            instalado = instalar_modulo(mod)
+            if instalado:
+                log_estado(f"✅ Módulo instalado automáticamente: {mod}")
+            else:
+                mensaje = f"❌ No se pudo instalar el módulo: {mod}"
+                memorizar("ERROR", mensaje)
+                log_estado(mensaje)
+                log_flotante_insert(mensaje)
+                return mensaje
+
+        # Re-verificar después de instalación automática
+        fallos_post, _ = analizar_imports(codigo)
+        if fallos_post:
+            mensaje = f"❌ Módulos aún faltantes: {', '.join(fallos_post)}"
+            memorizar("ERROR", mensaje)
+            log_estado(mensaje)
+            log_flotante_insert(mensaje)
+            return mensaje
+
+    # Ejecutar código Python si permisos permiten
     if permisos['python']:
         try:
             codigo_real = codigo.encode('utf-8').decode('unicode_escape')
-
-            # Log línea por línea antes de ejecutar
             for num, linea in enumerate(codigo_real.splitlines(), start=1):
                 if linea.strip():
                     log_estado(f"▶ Ejecutando línea Python {num}: {linea}")
                     time.sleep(0.05)
-
-            # Ejecuta el código libremente
-            exec(codigo_real)
+            exec(codigo_real, globals())
             memorizar("RESULTADO", "Código Python ejecutado correctamente")
             return "✅ Código Python ejecutado correctamente"
-
         except Exception as e:
             memorizar("ERROR", str(e))
             log_estado(f"🧠 Memoria de error guardada: {e}")
@@ -234,7 +281,7 @@ def ejecutar_como_app(codigo):
                 f.write(codigo)
             comando = ["python", archivo_temp]
             proceso = subprocess.run(comando, capture_output=True, text=True)
-            os.remove(archivo_temp)  # Limpiar después de ejecutar
+            os.remove(archivo_temp)
         else:
             comando = codigo.split()
             proceso = subprocess.run(comando, capture_output=True, text=True)
@@ -249,7 +296,6 @@ def ejecutar_como_app(codigo):
         log_estado(f"🧠 Error al ejecutar app: {e}")
         log_flotante_insert(f"❌ ERROR App: {e}")
         return f"❌ ERROR App: {e}"
-
 
 # =========================
 # AGENTE
@@ -472,7 +518,6 @@ def crear_burbuja_completa():
         burbuja.after(500, actualizar_log)
 
     actualizar_log()
-
 
 ventana.after(1000, crear_burbuja_completa)
 ventana.mainloop()
