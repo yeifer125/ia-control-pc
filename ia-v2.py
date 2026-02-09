@@ -48,7 +48,6 @@ TIPOS_VALIDOS = [
     "CONCLUSION"
 ]
 
-
 def cargar_memoria():
     if os.path.exists(MEMORIA_ARCHIVO):
         with open(MEMORIA_ARCHIVO, "r", encoding="utf-8") as f:
@@ -112,6 +111,9 @@ REGLAS:
 - No marques objetivo completado sin ejecutar código real
 - Si solo es conversación → action = "none"
 - Si requiere acción real → action = "python"
+- Guarda solo reglas, conclusiones o patrones reutilizables
+- Usa formato: "RULE: cuando X ocurre → hacer Y"
+- No guardes flags genéricos ni estados temporales
 
 RAZONAMIENTO:
 - Antes de ejecutar código, valida mentalmente que la API, comando o método que planeas usar EXISTE y es utilizable en este entorno.
@@ -119,6 +121,7 @@ RAZONAMIENTO:
 - Si el objetivo es IMPOSIBLE o INDETERMINADO, explica brevemente por qué y usa action = "none".
 - No confundas “avanzar” con “ejecutar”; pensar también es progreso.
 - Si ocurre un error, identifica la causa raíz antes de intentar corregirlo.
+
 
 Responde SOLO en JSON:
 
@@ -130,7 +133,6 @@ Responde SOLO en JSON:
   "memory": ""
 }
 """
-
 
 # =========================
 # UI
@@ -171,8 +173,8 @@ def log_flotante_insert(msg):
 def llamar_ia(historial, memoria, permisos):
     log_estado("🧠 Pensando...")
     memoria_texto = "\n".join(
-    m for m in memoria if m.startswith("CONCLUSION=")
-)
+        m for m in memoria if m.startswith("CONCLUSION=")
+    )
 
     contexto = SYSTEM_PROMPT + "\nMEMORIA:\n" + memoria_texto + f"\nPERMISOS: {permisos}\n" + "\n".join(historial)
     return ollama.generate(model=MODEL, prompt=contexto)["response"]
@@ -180,13 +182,24 @@ def llamar_ia(historial, memoria, permisos):
 # =========================
 # EJECUTAR CÓDIGO
 # =========================
+def codigo_esta_escapado(codigo: str) -> bool:
+    return "\\n" in codigo or "\\t" in codigo
+
+
 def ejecutar_codigo(codigo, permisos):
     if not permisos['python'] and not permisos['apps']:
         return "⛔ Permiso para ejecutar código denegado"
 
     if permisos['python']:
+        if codigo_esta_escapado(codigo):
+            mensaje = "❌ Código recibido está escapado (\\n, \\t). No es Python ejecutable."
+            memorizar("ERROR", mensaje)
+            log_estado(mensaje)
+            return mensaje
+        
+        
         try:
-            codigo_real = codigo.replace("\\", "\\\\")
+            codigo_real = codigo.encode('utf-8').decode('unicode_escape')
             entorno = {
                 "subprocess": subprocess if permisos['apps'] else None,
                 "os": os,
@@ -199,19 +212,22 @@ def ejecutar_codigo(codigo, permisos):
                 "print": log_flotante_insert,
                 "__name__": "__main__"
             }
+            
+
             for num, linea in enumerate(codigo_real.splitlines(), start=1):
                 if linea.strip():
                     log_estado(f"▶ Ejecutando línea Python {num}: {linea}")
                     time.sleep(0.05)
+
             exec(codigo_real, entorno)
             memorizar("RESULTADO", "Código Python ejecutado correctamente")
             return "✅ Código Python ejecutado correctamente"
+
         except Exception as e:
             memorizar("ERROR", str(e))
             log_estado(f"🧠 Memoria de error guardada: {e}")
             log_flotante_insert(f"❌ ERROR Python: {e}")
-            if permisos['apps']:
-                return ejecutar_como_app(codigo_real)
+            return f"❌ ERROR Python: {e}"  # 🔧 CAMBIO 2
 
     if permisos['apps']:
         return ejecutar_como_app(codigo)
@@ -227,12 +243,14 @@ def ejecutar_como_app(codigo):
             comando = ["python", archivo_temp]
         else:
             comando = codigo.split()
+
         log_estado(f"⚙ Ejecutando comando externo: {' '.join(comando)}")
         proceso = subprocess.run(comando, capture_output=True, text=True)
         salida = proceso.stdout + proceso.stderr
         memorizar("RESULTADO", salida.strip())
         log_flotante_insert(salida.strip())
         return f"✅ Comando ejecutado:\n{salida.strip()}"
+
     except Exception as e:
         memorizar("ERROR", str(e))
         log_estado(f"🧠 Error al ejecutar app: {e}")
@@ -249,6 +267,7 @@ def agente(objetivo):
     memoria = cargar_memoria()
     permisos = PERFILES[perfil_var.get()].copy()
     permisos.update(permisos_dinamicos)
+
     memorizar("OBJETIVO", objetivo)
     memorizar("CONVERSACION", objetivo)
 
@@ -280,7 +299,6 @@ def agente(objetivo):
             set_estado("IDLE")
             return
 
-        # Manejo seguro de keys
         thought = data.get('thought', "—")
         action = data.get('action', 'none')
         code = data.get('code', '')
@@ -293,7 +311,6 @@ def agente(objetivo):
         if memory:
             memorizar("CONCLUSION", memory)
             log_estado(f"🧠 Conclusión guardada: {memory}")
-
 
         if action == 'none':
             log_estado("ℹ️ Sin acción requerida")

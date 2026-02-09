@@ -11,6 +11,8 @@ import pyautogui
 import pygetwindow as gw
 import pyperclip
 import webbrowser
+import re
+
 
 # =========================
 # CONFIG
@@ -47,7 +49,6 @@ TIPOS_VALIDOS = [
     "REGLA",
     "CONCLUSION"
 ]
-
 
 def cargar_memoria():
     if os.path.exists(MEMORIA_ARCHIVO):
@@ -112,6 +113,9 @@ REGLAS:
 - No marques objetivo completado sin ejecutar código real
 - Si solo es conversación → action = "none"
 - Si requiere acción real → action = "python"
+- Guarda solo reglas, conclusiones o patrones reutilizables
+- Usa formato: "RULE: cuando X ocurre → hacer Y"
+- No guardes flags genéricos ni estados temporales
 
 RAZONAMIENTO:
 - Antes de ejecutar código, valida mentalmente que la API, comando o método que planeas usar EXISTE y es utilizable en este entorno.
@@ -119,6 +123,7 @@ RAZONAMIENTO:
 - Si el objetivo es IMPOSIBLE o INDETERMINADO, explica brevemente por qué y usa action = "none".
 - No confundas “avanzar” con “ejecutar”; pensar también es progreso.
 - Si ocurre un error, identifica la causa raíz antes de intentar corregirlo.
+
 
 Responde SOLO en JSON:
 
@@ -130,7 +135,6 @@ Responde SOLO en JSON:
   "memory": ""
 }
 """
-
 
 # =========================
 # UI
@@ -171,52 +175,46 @@ def log_flotante_insert(msg):
 def llamar_ia(historial, memoria, permisos):
     log_estado("🧠 Pensando...")
     memoria_texto = "\n".join(
-    m for m in memoria if m.startswith("CONCLUSION=")
-)
+        m for m in memoria if m.startswith("CONCLUSION=")
+    )
 
     contexto = SYSTEM_PROMPT + "\nMEMORIA:\n" + memoria_texto + f"\nPERMISOS: {permisos}\n" + "\n".join(historial)
     return ollama.generate(model=MODEL, prompt=contexto)["response"]
 
-# =========================
-# EJECUTAR CÓDIGO
-# =========================
+def codigo_esta_escapado(codigo: str) -> bool:
+    # Detecta secuencias de escape fuera de strings
+    return bool(re.search(r'\\[nt]', codigo))
+
 def ejecutar_codigo(codigo, permisos):
     if not permisos['python'] and not permisos['apps']:
         return "⛔ Permiso para ejecutar código denegado"
 
     if permisos['python']:
         try:
-            codigo_real = codigo.replace("\\", "\\\\")
-            entorno = {
-                "subprocess": subprocess if permisos['apps'] else None,
-                "os": os,
-                "time": time,
-                "pyautogui": pyautogui,
-                "pygetwindow": gw,
-                "webbrowser": webbrowser,
-                "pyperclip": pyperclip,
-                "log_flotante": log_flotante_insert,
-                "print": log_flotante_insert,
-                "__name__": "__main__"
-            }
+            codigo_real = codigo.encode('utf-8').decode('unicode_escape')
+
+            # Log línea por línea antes de ejecutar
             for num, linea in enumerate(codigo_real.splitlines(), start=1):
                 if linea.strip():
                     log_estado(f"▶ Ejecutando línea Python {num}: {linea}")
                     time.sleep(0.05)
-            exec(codigo_real, entorno)
+
+            # Ejecuta el código libremente
+            exec(codigo_real)
             memorizar("RESULTADO", "Código Python ejecutado correctamente")
             return "✅ Código Python ejecutado correctamente"
+
         except Exception as e:
             memorizar("ERROR", str(e))
             log_estado(f"🧠 Memoria de error guardada: {e}")
             log_flotante_insert(f"❌ ERROR Python: {e}")
-            if permisos['apps']:
-                return ejecutar_como_app(codigo_real)
+            return f"❌ ERROR Python: {e}"
 
     if permisos['apps']:
         return ejecutar_como_app(codigo)
 
     return "⛔ No se pudo ejecutar el código"
+
 
 def ejecutar_como_app(codigo):
     try:
@@ -225,19 +223,23 @@ def ejecutar_como_app(codigo):
             with open(archivo_temp, "w", encoding="utf-8") as f:
                 f.write(codigo)
             comando = ["python", archivo_temp]
+            proceso = subprocess.run(comando, capture_output=True, text=True)
+            os.remove(archivo_temp)  # Limpiar después de ejecutar
         else:
             comando = codigo.split()
-        log_estado(f"⚙ Ejecutando comando externo: {' '.join(comando)}")
-        proceso = subprocess.run(comando, capture_output=True, text=True)
+            proceso = subprocess.run(comando, capture_output=True, text=True)
+
         salida = proceso.stdout + proceso.stderr
         memorizar("RESULTADO", salida.strip())
         log_flotante_insert(salida.strip())
         return f"✅ Comando ejecutado:\n{salida.strip()}"
+
     except Exception as e:
         memorizar("ERROR", str(e))
         log_estado(f"🧠 Error al ejecutar app: {e}")
         log_flotante_insert(f"❌ ERROR App: {e}")
         return f"❌ ERROR App: {e}"
+
 
 # =========================
 # AGENTE
@@ -249,6 +251,7 @@ def agente(objetivo):
     memoria = cargar_memoria()
     permisos = PERFILES[perfil_var.get()].copy()
     permisos.update(permisos_dinamicos)
+
     memorizar("OBJETIVO", objetivo)
     memorizar("CONVERSACION", objetivo)
 
@@ -280,7 +283,6 @@ def agente(objetivo):
             set_estado("IDLE")
             return
 
-        # Manejo seguro de keys
         thought = data.get('thought', "—")
         action = data.get('action', 'none')
         code = data.get('code', '')
@@ -293,7 +295,6 @@ def agente(objetivo):
         if memory:
             memorizar("CONCLUSION", memory)
             log_estado(f"🧠 Conclusión guardada: {memory}")
-
 
         if action == 'none':
             log_estado("ℹ️ Sin acción requerida")
@@ -404,7 +405,7 @@ tk.Button(botones, text="⏸ PAUSA", width=15, command=pausa).pack(side=tk.LEFT,
 tk.Button(botones, text="⛔ STOP", width=15, command=stop).pack(side=tk.RIGHT, padx=10)
 
 # =========================
-# BURBUJA FLOTANTE
+# BURBUJA FLOTANTE OPTIMIZADA
 # =========================
 def crear_burbuja_completa():
     global log_flotante
@@ -448,16 +449,20 @@ def crear_burbuja_completa():
     log_area.bind("<Button-1>", start_move)
     log_area.bind("<B1-Motion>", do_move)
 
+    ultima_linea = 1
     def actualizar_log():
-        contenido = chat.get("1.0", tk.END)
-        log_area.config(state="normal")
-        log_area.delete("1.0", tk.END)
-        log_area.insert(tk.END, contenido)
-        log_area.see(tk.END)
-        log_area.config(state="disabled")
+        nonlocal ultima_linea
+        contenido = chat.get(f"{ultima_linea}.0", tk.END)
+        if contenido.strip():
+            log_area.config(state="normal")
+            log_area.insert(tk.END, contenido)
+            log_area.see(tk.END)
+            log_area.config(state="disabled")
+        ultima_linea = int(chat.index(tk.END).split('.')[0])
         burbuja.after(500, actualizar_log)
 
     actualizar_log()
+
 
 ventana.after(1000, crear_burbuja_completa)
 ventana.mainloop()
