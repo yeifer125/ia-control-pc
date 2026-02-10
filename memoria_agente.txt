@@ -1,13 +1,1 @@
-CONCLUSION=Contraseña root Linux: abc123
-CONCLUSION=El comando 'nmap' está instalado y accesible en  linux shell
-CONCLUSION=El comando 'nmap' está instalado y accesible en Windows shell
-CONCLUSION=CONCLUSION=Contraseña root Linux: abc123
-CONCLUSION=El comando 'nmap' está instalado y accesible en  linux shell
-CONCLUSION=El comando 'nmap' está instalado y accesible en windows_shell
-CONCLUSION=CONCLUSION=El comando 'nmap' está instalado y accesible en linux shell
-CONCLUSION=El comando 'nmap' está instalado y accesible en Windows shell
-CONCLUSION=CONCLUSION=Contraseña root Linux: abc123
-CONCLUSION=El comando 'nmap' está instalado y accesible en  linux shell
-CONCLUSION=El comando 'nmap' está instalado y accesible en windows_shell
-CONCLUSION=CONCLUSION=El comando 'nmap' está instalado y accesible en linux shell
-CONCLUSION=El comando 'nmap' está instalado y accesible en Windows shell
+
