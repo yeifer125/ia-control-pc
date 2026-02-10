@@ -1,5 +1,13 @@
-OBJETIVO=ejecuta nmap y muestra el resultado
-OBJETIVO=busca en internet como tener shodan premier o acesso ilimitado
-RESULTADO=Nmap version 7.98 
-CONVERSACION=ejecuta nmap y muestra el resultado
-CONVERSACION=busca en internet como tener shodan premier o acesso ilimitado
+CONCLUSION=Contraseña root Linux: abc123
+CONCLUSION=El comando 'nmap' está instalado y accesible en  linux shell
+CONCLUSION=El comando 'nmap' está instalado y accesible en Windows shell
+CONCLUSION=CONCLUSION=Contraseña root Linux: abc123
+CONCLUSION=El comando 'nmap' está instalado y accesible en  linux shell
+CONCLUSION=El comando 'nmap' está instalado y accesible en windows_shell
+CONCLUSION=CONCLUSION=El comando 'nmap' está instalado y accesible en linux shell
+CONCLUSION=El comando 'nmap' está instalado y accesible en Windows shell
+CONCLUSION=CONCLUSION=Contraseña root Linux: abc123
+CONCLUSION=El comando 'nmap' está instalado y accesible en  linux shell
+CONCLUSION=El comando 'nmap' está instalado y accesible en windows_shell
+CONCLUSION=CONCLUSION=El comando 'nmap' está instalado y accesible en linux shell
+CONCLUSION=El comando 'nmap' está instalado y accesible en Windows shell
