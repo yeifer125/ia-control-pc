@@ -110,6 +110,9 @@ def guardar_script(nombre_archivo, codigo):
 SYSTEM_PROMPT = """
 Eres un agente autónomo ejecutándose en WINDOWS.
 REGLAS:
+- Si action = "none", usa el campo "code" para responder al usuario en lenguaje natural, no para ejecutar código.
+- Si action = "none" y es conversación, el campo "code" DEBE contener la respuesta al usuario en lenguaje natural.
+- si ERROR se repite → cambiar estrategia
 - Usa la MEMORIA si existe información previa útil
 - No inventes rutas ni métodos que no existan realmente
 - No marques objetivo completado sin ejecutar código real
@@ -328,6 +331,28 @@ def ejecutar_como_app(codigo):
 permisos_dinamicos = {"python": True, "apps": True}
 
 def agente(objetivo):
+
+    # =========================
+    # 🔍 INTERCEPTOR pip install
+    # =========================
+    if objetivo.strip().lower().startswith("pip install "):
+        modulo = objetivo.strip().split()[-1]
+        log_estado(f"📦 Instalación solicitada: {modulo}")
+
+        exito = instalar_modulo(modulo)
+        if exito:
+            log_chat(f"IA: ✅ El módulo '{modulo}' fue instalado correctamente.")
+            memorizar("CONCLUSION", f"Módulo instalado manualmente: {modulo}")
+        else:
+            log_chat(f"IA: ❌ No se pudo instalar el módulo '{modulo}'.")
+            memorizar("ERROR", f"Fallo instalando módulo: {modulo}")
+
+        set_estado("IDLE")
+        return
+    # =========================
+    # FIN INTERCEPTOR
+    # =========================
+
     historial = [f"USUARIO: {objetivo}"]
     memoria = cargar_memoria()
     permisos = PERFILES[perfil_var.get()].copy()
@@ -378,7 +403,12 @@ def agente(objetivo):
             log_estado(f"🧠 Conclusión guardada: {memory}")
 
         if action == 'none':
-            log_estado("ℹ️ Sin acción requerida")
+            respuesta_texto = code.strip() or thought.strip()
+            if respuesta_texto:
+                log_chat(f"IA: {respuesta_texto}")
+            else:
+                log_chat("IA: 👋 Hola, dime qué necesitas.")
+            log_estado("ℹ️ Conversación sin ejecución")
             set_estado("IDLE")
             return
 
@@ -406,6 +436,7 @@ def agente(objetivo):
 
     log_estado("⌛ Límite alcanzado")
     set_estado("IDLE")
+
 
 # =========================
 # CONTROLES
